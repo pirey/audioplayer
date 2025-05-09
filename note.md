@@ -2,25 +2,49 @@
 
 ## Audio Data
 
+### Audio Sample
+
+- Sample -> a value -> amplitude/loudness/how loud the air is vibrating
+- 16-bit PCM audio -> `int16_t`
+- 8-bit audio  -> `int8_t`
+
+Sequence of sample over time -> waveform -> tone, pitch, and timbre
+
+- Pitch -> frequency of a sound wave
+- Tone -> character/quality of sound
+- Timbre -> color/texture of sound
+
+### Sample Rate
+
+How many sample per second
+
+- 44.1kHz Sample Rate -> 441000Hz -> 441000 sample in one second
+- Nyquist theorem: Human hearing range 20kHz, need > 40kHz to capture the audio
+
+### Bit Per Sample / Bit Depth
+
+How many bits per sample
+
+### Byte Rate
+
+How many bytes per second
+
+
 ### WAV format
 - binary file with RIFF format
 - raw audio data
 - binary layout
   - RIFF header
   - fmt header
-    - sample rate
-    - channels
-    - bit depth
-    - etc
   - raw audio samples
 
 Offset | Size | Description
 -------|------|------------
 0      | 4    | "RIFF" (ASCII)
-4      | 4    | File size - 8
+4      | 4    | total file size minus 8
 8      | 4    | "WAVE"
 12     | 4    | "fmt " (subchunk ID)
-16     | 4    | Subchunk1 size (usually 16 for PCM)
+16     | 4    | Subchunk1 size (usually 16 for PCM), this refers to the total size of the fields below
 20     | 2    | Audio format (1 = PCM)
 22     | 2    | Num channels
 24     | 4    | Sample rate
@@ -35,7 +59,7 @@ Offset | Size | Description
 
 RIFF = Resource Interchange File Format
 
-### PCM - Pulse Code Modulation
+#### PCM - Pulse Code Modulation
 
 ### Soundcard/Audio Output
 
