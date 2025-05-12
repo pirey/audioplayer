@@ -1,12 +1,8 @@
 # Audio Player
 
-## Audio Data
+## Audio Sample
 
-### Audio Sample
-
-- Sample -> a value -> amplitude/loudness/how loud the air is vibrating
-- 16-bit PCM audio -> `int16_t`
-- 8-bit audio  -> `int8_t`
+Sample -> a value -> amplitude/loudness/how loud the air is vibrating
 
 Sequence of sample over time -> waveform -> tone, pitch, and timbre
 
@@ -14,25 +10,42 @@ Sequence of sample over time -> waveform -> tone, pitch, and timbre
 - Tone -> character/quality of sound
 - Timbre -> color/texture of sound
 
-### Sample Rate
+## Quantization
+
+Convert continuous analog value into a fixed, discrete digital value during digital-to-analog conversion.
+
+## Sample Rate
 
 How many sample per second
 
 - 44.1kHz Sample Rate -> 441000Hz -> 441000 sample in one second
 - Nyquist theorem: Human hearing range 20kHz, need > 40kHz to capture the audio
 
-### Bit Per Sample / Bit Depth
+## Bit Depth/Bit Per Sample
 
-How many bits per sample
+How many bits per sample.
 
-### Byte Rate
+## Amplitude
 
-How many bytes per second
+Higher amplitude = louder sound
 
+## Dynamic Range
 
-### WAV format
+Range between the quietest and loudest sound a system can capture.
+
+Higher bit depth = wider range.
+
+## Audio Fidelity
+
+How accurately a recording/playback reproduces the original sound.
+
+## Byte Rate
+
+How many bytes per second = bit per sample * sample rate
+
+## WAV format
 - binary file with RIFF format
-- raw audio data
+- raw uncompressed audio data
 - binary layout
   - RIFF header
   - fmt header
@@ -55,33 +68,38 @@ Offset | Size | Description
 40     | 4    | Subchunk2 size (data size)
 44     | ...  | Actual audio data
 
-#### RIFF format
+## RIFF format
 
 RIFF = Resource Interchange File Format
 
-#### PCM - Pulse Code Modulation
+Store data in tagged chunk.
 
-### Soundcard/Audio Output
+Tags: "RIFF", "fmt ", "data", "LIST"
 
-## File I/O
-- Read WAV file
-- Parsing WAV
+## PCM - Pulse Code Modulation
 
-## Playing Audio
-- Audio Output API: to interact with audio driver
-  - Linux: ALSA/PulseAudio
-  - macOS: CoreAudio
-  - Windows: WASAPI/DirectSound
+Standard format for uncompressed digital audio
 
-## Simple Playback
-  - static tone: e.g. sine wave
-  - pre-recorded WAV file
+1. Sampling
+2. Quantization
+3. Encoding
+
+## Soundcard/Audio Output
+
+## Audio Output API
+- Linux: ALSA/PulseAudio
+- macOS: CoreAudio
+- Windows: WASAPI/DirectSound
 
 ## Synchronization
-need to sync so audio plays at the correct speed according to sample rate.
 
-- manage buffers, handle timing
-- simple timer
+## Upmixing
+
+Convert audio with fewer channel to format with more channels, e.g. duplicate mono channel into stereo
+
+## Resampling
+
+Change audio sample rate to other rate, e.g. to match device sample rate
 
 ## Misc
 
@@ -91,57 +109,10 @@ Generate wav file using sox:
 sox -n output.wav synth 3 sine 440
 ```
 
-# Binary File
-
-## Structure
-- Header (optional)
-- Data blocks - raw bytes
-- Footer (optional) - checksums, padding, markers
-
-## Binary Layout
-How data is laid out in memory or file, byte by byte.
-
-Every binary files has its own layout, defined by whoever designed it.
-
-```c
-typedef struct {
-  uint32_t id; // 4 bytes
-  float value; // 4 bytes
-  char name[4]; // 4 bytes
-} Record;
-
-// Record -> 12 bytes
-//
-```
-
-See [Hex Dump](#hex-dump).
-
-C structs are stored in memory as raw bytes and written to binary file directly.
-
-## Hex Dump <a name="hex-dump"></a>
-Human readable view of binary data
-
-View hexdump using tools, e.g. `xxd`
-
-```
-[00 00 00 01] [00 00 80 3F] [41 42 43 00]
-   id = 1       value = 1.0f   name = "ABC"
-
-```
-
-## Endianness
-
-Byte Order
-
-Little-endian: least significant byte first → 0x12345678 → 78 56 34 12
-
-Big-endian: most significant byte first → 0x12345678 → 12 34 56 78
-
-# TODO
+## TODO
 - [ ] play basic WAV file
 - [ ] handle large file
-- [ ] synchronize audio
 - [ ] user input: pause/stop
-- [ ] support more audio format
+- [ ] support more audio format: MP3, AAC, OGG, FLACC
 - [ ] TUI
 - [ ] GUI

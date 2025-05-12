@@ -1,18 +1,20 @@
 #include <stdio.h>
-#include <AudioToolbox/AudioToolbox.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <AudioToolbox/AudioToolbox.h>
+#endif
 
 // WAV header structure (minimal for PCM)
 typedef struct {
     char chunk_id[4]; // "RIFF"
     uint32_t chunk_size; // File size - 8
     char format[4]; // "WAVE"
-
     char subchunk1_id[4]; // "fmt "
-    uint32_t subchunk1_size; // 16 for PCM, can be larger for non-PCM, this size is referring to the total size header fields below
+    uint32_t subchunk1_size; // 16 for PCM
     uint16_t audio_format; // 1 for PCM
     uint16_t num_channels; // 1 = mono, 2 = stereo
     uint32_t sample_rate; // e.g., 44100
@@ -21,7 +23,7 @@ typedef struct {
     uint16_t bits_per_sample; // e.g., 16
 } WavHeader;
 
-// Playback state
+// Playback state (platform-agnostic)
 typedef struct {
     uint8_t *audio_data; // Raw PCM data
     uint32_t data_size; // Total size of audio data
@@ -32,13 +34,11 @@ typedef struct {
     uint16_t output_channels; // Device output channels
 } PlaybackState;
 
-// Global playback state
-static PlaybackState playback_state = {0};
-
-// Audio Unit callback to feed audio data
-OSStatus audioCallback(void *inRefCon, AudioUnitRenderActionFlags *ioActionFlags,
-                       const AudioTimeStamp *inTimeStamp, UInt32 inBusNumber,
-                       UInt32 inNumberFrames, AudioBufferList *ioData) {
+#ifdef __APPLE__
+// macOS-specific callback for Core Audio
+static OSStatus audioCallback(void *inRefCon, AudioUnitRenderActionFlags *ioActionFlags,
+                              const AudioTimeStamp *inTimeStamp, UInt32 inBusNumber,
+                              UInt32 inNumberFrames, AudioBufferList *ioData) {
     PlaybackState *state = (PlaybackState *)inRefCon;
     AudioBuffer *buffer = &ioData->mBuffers[0];
 
@@ -59,26 +59,36 @@ OSStatus audioCallback(void *inRefCon, AudioUnitRenderActionFlags *ioActionFlags
         inNumberFrames = input_bytes_to_copy / input_bytes_per_frame;
     }
 
-    // Convert 16-bit integer PCM to 32-bit float
+    // Convert 16-bit integer PCM to 32-bit float, with upmixing for mono
     int16_t *src = (int16_t *)(state->audio_data + state->offset);
     float *dst = (float *)buffer->mData;
     uint32_t samples_per_channel = inNumberFrames;
-    for (uint32_t i = 0; i < samples_per_channel; i++) {
-        // Convert left and right channels (stereo)
-        dst[i * 2] = src[i * 2] / 32768.0f;       // Left channel: [-32768, 32767] to [-1.0, 1.0]
-        dst[i * 2 + 1] = src[i * 2 + 1] / 32768.0f; // Right channel
+    if (state->num_channels == 2) {
+        // Stereo: Direct conversion
+        for (uint32_t i = 0; i < samples_per_channel; i++) {
+            dst[i * 2] = src[i * 2] / 32768.0f;       // Left channel
+            dst[i * 2 + 1] = src[i * 2 + 1] / 32768.0f; // Right channel
+        }
+    } else {
+        // Mono: Upmix to stereo by duplicating samples
+        for (uint32_t i = 0; i < samples_per_channel; i++) {
+            float sample = src[i] / 32768.0f;
+            dst[i * 2] = sample;     // Left channel
+            dst[i * 2 + 1] = sample; // Right channel
+        }
     }
     buffer->mDataByteSize = inNumberFrames * output_bytes_per_frame;
     state->offset += input_bytes_to_copy;
 
     return noErr;
 }
+#endif
 
-int main() {
-    // Open WAV file
-    FILE *file = fopen("sample.wav", "rb"); // Replace with your WAV file path
+// Read and parse WAV file (platform-agnostic)
+static int read_wav_file(const char *filename, PlaybackState *state, float *duration) {
+    FILE *file = fopen(filename, "rb");
     if (!file) {
-        printf("Error: Cannot open file\n");
+        printf("Error: Cannot open file %s\n", filename);
         return 1;
     }
 
@@ -149,7 +159,7 @@ int main() {
         printf("Chunk: id=%c%c%c%c, size=%u, file_pos=%ld\n",
                chunk_id[0], chunk_id[1], chunk_id[2], chunk_id[3], chunk_size, ftell(file) - 8);
         if (strncmp(chunk_id, "data", 4) == 0) {
-            playback_state.data_size = chunk_size;
+            state->data_size = chunk_size;
             break;
         }
         fseek(file, chunk_size, SEEK_CUR); // Skip chunk
@@ -167,32 +177,41 @@ int main() {
     printf("  Bits per Sample: %u\n", header.bits_per_sample);
     printf("  Byte Rate: %u bytes/s\n", header.byte_rate);
     printf("  Block Align: %u bytes\n", header.block_align);
-    printf("  Data Size: %u bytes\n", playback_state.data_size);
-    printf("  Duration: %.2f seconds\n", (float)playback_state.data_size / header.byte_rate);
+    printf("  Data Size: %u bytes\n", state->data_size);
+    printf("  Duration: %.2f seconds\n", (float)state->data_size / header.byte_rate);
 
     // Read audio data
-    playback_state.audio_data = malloc(playback_state.data_size);
-    if (!playback_state.audio_data) {
+    state->audio_data = malloc(state->data_size);
+    if (!state->audio_data) {
         printf("Error: Memory allocation failed\n");
         fclose(file);
         return 1;
     }
-    size_t bytes_read = fread(playback_state.audio_data, 1, playback_state.data_size, file);
-    if (bytes_read != playback_state.data_size) {
+    size_t bytes_read = fread(state->audio_data, 1, state->data_size, file);
+    if (bytes_read != state->data_size) {
         printf("Error: Failed to read audio data (%zu bytes read, expected %u)\n",
-               bytes_read, playback_state.data_size);
-        free(playback_state.audio_data);
+               bytes_read, state->data_size);
+        free(state->audio_data);
         fclose(file);
         return 1;
     }
     fclose(file);
-    playback_state.offset = 0;
-    playback_state.sample_rate = header.sample_rate;
-    playback_state.num_channels = header.num_channels;
-    playback_state.bits_per_sample = header.bits_per_sample;
-    playback_state.output_channels = 2; // Assume stereo output
 
-    // Set up Audio Unit
+    // Initialize playback state
+    state->offset = 0;
+    state->sample_rate = header.sample_rate;
+    state->num_channels = header.num_channels;
+    state->bits_per_sample = header.bits_per_sample;
+    state->output_channels = header.num_channels; // Default to WAV channels, updated by platform
+    *duration = (float)state->data_size / header.byte_rate;
+
+    return 0;
+}
+
+// Platform-specific audio playback
+static int play_audio(PlaybackState *state, float duration) {
+#ifdef __APPLE__
+    // macOS: Use Core Audio
     AudioComponentInstance audioUnit;
     AudioComponentDescription desc = {
         .componentType = kAudioUnitType_Output,
@@ -205,20 +224,20 @@ int main() {
     AudioComponent comp = AudioComponentFindNext(NULL, &desc);
     if (!comp) {
         printf("Error: Cannot find audio component\n");
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
     OSStatus err = AudioComponentInstanceNew(comp, &audioUnit);
     if (err != noErr) {
         printf("Error: Failed to create audio unit instance (%d)\n", err);
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
     err = AudioUnitInitialize(audioUnit);
     if (err != noErr) {
         printf("Error: Failed to initialize audio unit (%d)\n", err);
         AudioComponentInstanceDispose(audioUnit);
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
 
@@ -249,10 +268,10 @@ int main() {
         .mBitsPerChannel = 32,
         .mChannelsPerFrame = device_asbd.mChannelsPerFrame,
         .mFramesPerPacket = 1,
-        .mBytesPerFrame = device_asbd.mChannelsPerFrame * 4, // 32-bit float
+        .mBytesPerFrame = device_asbd.mChannelsPerFrame * 4,
         .mBytesPerPacket = device_asbd.mChannelsPerFrame * 4
     };
-    playback_state.output_channels = asbd.mChannelsPerFrame;
+    state->output_channels = asbd.mChannelsPerFrame;
     printf("ASBD: sample_rate=%.0f, channels=%u, bits=%u, bytes_per_frame=%u, format=float\n",
            asbd.mSampleRate, asbd.mChannelsPerFrame, asbd.mBitsPerChannel, asbd.mBytesPerFrame);
 
@@ -261,7 +280,7 @@ int main() {
         printf("Error: Failed to set output stream format (%d)\n", err);
         AudioUnitUninitialize(audioUnit);
         AudioComponentInstanceDispose(audioUnit);
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
     err = AudioUnitSetProperty(audioUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &asbd, sizeof(asbd));
@@ -269,18 +288,18 @@ int main() {
         printf("Error: Failed to set input stream format (%d)\n", err);
         AudioUnitUninitialize(audioUnit);
         AudioComponentInstanceDispose(audioUnit);
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
 
     // Set callback
-    AURenderCallbackStruct callback = { .inputProc = audioCallback, .inputProcRefCon = &playback_state };
+    AURenderCallbackStruct callback = { .inputProc = audioCallback, .inputProcRefCon = state };
     err = AudioUnitSetProperty(audioUnit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &callback, sizeof(callback));
     if (err != noErr) {
         printf("Error: Failed to set render callback (%d)\n", err);
         AudioUnitUninitialize(audioUnit);
         AudioComponentInstanceDispose(audioUnit);
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
 
@@ -291,14 +310,13 @@ int main() {
         printf("Error: Failed to start audio unit (%d)\n", err);
         AudioUnitUninitialize(audioUnit);
         AudioComponentInstanceDispose(audioUnit);
-        free(playback_state.audio_data);
+        free(state->audio_data);
         return 1;
     }
 
     // Wait for playback to finish
-    float duration = (float)playback_state.data_size / header.byte_rate;
     printf("Expected duration: %.2f seconds\n", duration);
-    while (playback_state.offset < playback_state.data_size) {
+    while (state->offset < state->data_size) {
         usleep(100000); // Sleep 100ms
     }
     printf("Playback finished\n");
@@ -307,7 +325,59 @@ int main() {
     AudioOutputUnitStop(audioUnit);
     AudioUnitUninitialize(audioUnit);
     AudioComponentInstanceDispose(audioUnit);
-    free(playback_state.audio_data);
+    free(state->audio_data);
+    return 0;
+
+#elif defined(_WIN32)
+    // TODO: Implement Windows audio playback using DirectSound or WASAPI
+    // Steps:
+    // 1. Initialize DirectSound or WASAPI with device format (e.g., 44100 Hz, 16-bit PCM).
+    // 2. Create a buffer for audio data.
+    // 3. Copy state->audio_data to the buffer, handling format conversion if needed.
+    // 4. Play the buffer and wait for completion.
+    // 5. Clean up resources.
+    printf("Error: Windows playback not implemented yet\n");
+    free(state->audio_data);
+    return 1;
+
+#elif defined(__linux__)
+    // TODO: Implement Linux audio playback using ALSA or PulseAudio
+    // Steps:
+    // 1. Open an ALSA/PulseAudio device with appropriate format (e.g., 44100 Hz, 16-bit PCM).
+    // 2. Configure playback parameters (sample rate, channels, bit depth).
+    // 3. Write state->audio_data to the device, handling format conversion if needed.
+    // 4. Wait for playback to complete.
+    // 5. Close the device and free resources.
+    printf("Error: Linux playback not implemented yet\n");
+    free(state->audio_data);
+    return 1;
+
+#else
+    // TODO: Implement playback for other platforms (e.g., BSD, etc.)
+    printf("Error: Unsupported platform\n");
+    free(state->audio_data);
+    return 1;
+#endif
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        printf("Usage: %s <wav_file>\n", argv[0]);
+        return 1;
+    }
+
+    PlaybackState state = {0};
+    float duration = 0.0f;
+
+    // Read WAV file
+    if (read_wav_file(argv[1], &state, &duration) != 0) {
+        return 1;
+    }
+
+    // Play audio (platform-specific)
+    if (play_audio(&state, duration) != 0) {
+        return 1;
+    }
 
     return 0;
 }
